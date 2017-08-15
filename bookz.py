@@ -28,6 +28,7 @@ class DCCReceive(irc.client.SimpleIRCClient):
         self.received_bytes = 0
         self.users = set()
         self.search = search
+        self.search_done = False
 
     def on_ctcp(self, connection, event):
         payload = event.arguments[1]
@@ -54,25 +55,34 @@ class DCCReceive(irc.client.SimpleIRCClient):
 
     def on_dcc_disconnect(self, connection, event):
         self.file.close()
-        print("Received file %s (%d bytes)." % (self.filename,
-                                                self.received_bytes))
-        try:
-            zipped = zipfile.ZipFile(self.filename)
-        except zipfile.BadZipFile as e:
-            zipped = rarfile.RarFile(self.filename)
+        if not self.search_done:
+            self.search_done = True
+            print("Received file %s (%d bytes)." % (self.filename,
+                                                    self.received_bytes))
+            try:
+                zipped = zipfile.ZipFile(self.filename)
+            except zipfile.BadZipFile as e:
+                zipped = rarfile.RarFile(self.filename)
 
-        getters = []
-        for f in zipped.namelist():
-            getters += [x for x in zipped.open(f).read().splitlines() if x.startswith('!')]
+            getters = []
+            for f in zipped.namelist():
+                getters += [x for x in zipped.open(f).read().splitlines() if x.startswith('!')]
 
-        for name in getters:
-            n = name.split()[0][1:]
-            if n in self.users:
-                print ("sending", name)
-                self.connection.privmsg("#bookz", name)
-                return
+            for name in getters:
+                n = name.split()[0][1:]
+                if n in self.users:
+                    print ("sending", name)
+                    self.connection.privmsg("#bookz", name)
+                    return
+            else:
+                print ("no good things")
         else:
-            print ("no good things")
+            # got a book i guess
+            if self.filename.endswith('rar'):
+                rarfile.RarFile(self.filename).extractall()
+            if self.filename.endswith('zip'):
+                zipfile.ZipFile(self.filename).extractall()
+
 
         # self.connection.quit()
 
