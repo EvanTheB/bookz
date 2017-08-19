@@ -156,6 +156,10 @@ def main():
     args = get_args()
     jaraco.logging.setup(args)
 
+
+    from jaraco.stream import buffer
+    irc.client.ServerConnection.buffer_class = buffer.LenientDecodingLineBuffer
+
     c = DCCReceive(args.channel)
     try:
         c.connect(args.server, args.port, args.nickname)
