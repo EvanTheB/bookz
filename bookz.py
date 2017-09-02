@@ -22,16 +22,22 @@ import select
 import jaraco.logging
 
 import irc.client
-        
+
 class Bookzer(irc.client.SimpleIRCClient):
     def __init__(self, channel):
         super(Bookzer, self).__init__()
         self.users = set()
         self.channel = channel
 
+    # def on_privmsg(self, c, e):
+    #     print(e)
+
+    # def on_pubmsg(self, c, e):
+    #     print(e)
+
     def msg(self, msg):
-        # connect -> search -> dcc recv -> choice list -> dcc recv  
-        #                ^\ -----------  </ ----------   </  
+        # connect -> search -> dcc recv -> choice list -> dcc recv
+        #                ^\ -----------  </ ----------   </
         try:
             choices = [int(m) for m in msg.split()]
         except ValueError as e:
@@ -59,7 +65,7 @@ class Bookzer(irc.client.SimpleIRCClient):
             print("downloading", filename, size)
             peer_address = irc.client.ip_numstr_to_quad(peer_address)
             peer_port = int(peer_port)
-            
+
             dcc = self.dcc_connect(peer_address, peer_port, "raw")
             dcc.filename = filename
             dcc.file = open(filename, "wb")
@@ -95,9 +101,10 @@ class Bookzer(irc.client.SimpleIRCClient):
             # got a book i guess
             if connection.filename.endswith('rar'):
                 rarfile.RarFile(connection.filename).extractall()
+                os.remove(connection.filename)
             if connection.filename.endswith('zip'):
                 zipfile.ZipFile(connection.filename).extractall()
-            os.remove(connection.filename)
+                os.remove(connection.filename)
 
     def on_disconnect(self, connection, event):
         print("disconnect")
@@ -162,7 +169,7 @@ def main():
         sys.exit(1)
 
     reactor = c.reactor
-    
+
     while True:
         reactor.process_once(0.2)
         while sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
