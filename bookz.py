@@ -22,31 +22,25 @@ import select
 import jaraco.logging
 
 import irc.client
-
-class DCCReceive(irc.client.SimpleIRCClient):
+        
+class Bookzer(irc.client.SimpleIRCClient):
     def __init__(self, channel):
-        irc.client.SimpleIRCClient.__init__(self)
-        self.received_bytes = 0
+        super(Bookzer, self).__init__()
         self.users = set()
         self.channel = channel
-        self.expect_book = False
 
     def msg(self, msg):
         # connect -> search -> dcc recv -> choice list -> dcc recv  
         #                ^\ -----------  </ ----------   </  
-        if self.expect_book:
-            try:
-                choice = int(msg)
-            except ValueError as e:
-                print("searching", msg)
-                self.expect_book = False
-                self.connection.privmsg(self.channel, "@search " + msg)
-            else:
-                print("sending", self.getters[choice])
-                self.connection.privmsg(self.channel, self.getters[choice])
-        else:
+        try:
+            choices = [int(m) for m in msg.split()]
+        except ValueError as e:
             print("searching", msg)
             self.connection.privmsg(self.channel, "@search " + msg)
+        else:
+            for choice in choices:
+                print("requesting", self.getters[choice])
+                self.connection.privmsg(self.channel, self.getters[choice])
 
     def on_ctcp(self, connection, event):
         payload = event.arguments[1]
@@ -58,52 +52,52 @@ class DCCReceive(irc.client.SimpleIRCClient):
         else:
             if command != "SEND":
                 return
-            self.filename = os.path.basename(filename)
-            if os.path.exists(self.filename):
-                print("A file named", self.filename, "already exists. Refusing to save it.")
+            filename = os.path.basename(filename)
+            if os.path.exists(filename):
+                print("A file named", filename, "already exists. Refusing to save it.")
                 return
-            print("downloading", self.filename, size)
-            self.file = open(self.filename, "wb")
+            print("downloading", filename, size)
             peer_address = irc.client.ip_numstr_to_quad(peer_address)
             peer_port = int(peer_port)
-            self.dcc = self.dcc_connect(peer_address, peer_port, "raw")
+            
+            dcc = self.dcc_connect(peer_address, peer_port, "raw")
+            dcc.filename = filename
+            dcc.file = open(filename, "wb")
+            dcc.received_bytes = 0
 
     def on_dccmsg(self, connection, event):
         data = event.arguments[0]
-        self.file.write(data)
-        self.received_bytes = self.received_bytes + len(data)
-        self.dcc.send_bytes(struct.pack("!I", self.received_bytes))
+        connection.file.write(data)
+        connection.received_bytes = connection.received_bytes + len(data)
+        connection.send_bytes(struct.pack("!I", connection.received_bytes))
 
     def on_dcc_disconnect(self, connection, event):
-        self.file.close()
-        print("Received file %s (%d bytes)." % (self.filename, self.received_bytes))
-        if not self.expect_book:
+        connection.file.close()
+        print("Received file %s (%d bytes)." % (connection.filename, connection.received_bytes))
+        if connection.filename.startswith("Search"):
             try:
-                zipped = zipfile.ZipFile(self.filename)
+                zipped = zipfile.ZipFile(connection.filename)
             except zipfile.BadZipFile as e:
-                zipped = rarfile.RarFile(self.filename)
+                zipped = rarfile.RarFile(connection.filename)
 
             getters = []
             for f in zipped.namelist():
                 getters += [x for x in zipped.open(f).read().splitlines() if x.startswith('!')]
 
-            self.getters = [g for g in getters if g.split()[0][1:] in self.users]
+            self.getters = sorted([g for g in getters if g.split()[0][1:] in self.users])
             for i,g in enumerate(self.getters):
                 print(i, g)
             print ("CHOOSE")
-            self.expect_book = True
 
             zipped.close()
+            os.remove(connection.filename)
         else:
             # got a book i guess
-            if self.filename.endswith('rar'):
-                rarfile.RarFile(self.filename).extractall()
-                os.remove(self.filename)
-            if self.filename.endswith('zip'):
-                zipfile.ZipFile(self.filename).extractall()
-                os.remove(self.filename)
-            
-            self.expect_book = False
+            if connection.filename.endswith('rar'):
+                rarfile.RarFile(connection.filename).extractall()
+            if connection.filename.endswith('zip'):
+                zipfile.ZipFile(connection.filename).extractall()
+            os.remove(connection.filename)
 
     def on_disconnect(self, connection, event):
         print("disconnect")
@@ -160,7 +154,7 @@ def main():
     from jaraco.stream import buffer
     irc.client.ServerConnection.buffer_class = buffer.LenientDecodingLineBuffer
 
-    c = DCCReceive(args.channel)
+    c = Bookzer(args.channel)
     try:
         c.connect(args.server, args.port, args.nickname)
     except irc.client.ServerConnectionError as x:
