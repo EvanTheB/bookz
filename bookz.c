@@ -29,6 +29,8 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include <errno.h>
 
 #include "libircclient.h"
 
@@ -87,12 +89,35 @@ void dump_event (irc_session_t * session, const char * event, const char * origi
     addlog ("Event \"%s\", origin: \"%s\", params: %d [%s]", event, origin ? origin : "NULL", cnt, buf);
 }
 
+struct thread_args
+{
+    irc_session_t *session;
+};
+static void * thread_function (void * vargs)
+{
+    struct thread_args *args = vargs;
+    while ( 1 )
+    {
+        char buffer[200];
+        char *buf = buffer;
+        size_t buffer_size = 200;
+        getline(&buf,&buffer_size,stdin);
+        irc_cmd_msg (args->session, "#channel", buf);
+    }
+    return 0;
+}
 
 void event_join (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
 {
     dump_event (session, event, origin, params, count);
     irc_cmd_user_mode (session, "+i");
     irc_cmd_msg (session, params[0], "Hi all");
+
+    pthread_t tid;
+    struct thread_args* ta = malloc(sizeof(ta));
+    ta->session = session;
+    if (pthread_create (&tid, 0, thread_function, ta) != 0)
+        printf ("CREATE_THREAD failed: %s\n", strerror(errno));
 }
 
 
