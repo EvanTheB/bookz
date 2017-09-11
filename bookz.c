@@ -34,6 +34,7 @@
 #include <unistd.h>
 
 #include "libircclient.h"
+#include "archive.h"
 
 
 /*
@@ -68,6 +69,84 @@ static void * thread_function(void * vargs)
     return 0;
 }
 
+static int
+copy_data(struct archive *ar, struct archive *aw)
+{
+  int r;
+  const void *buff;
+  size_t size;
+  la_int64_t offset;
+
+  for (;;) {
+    r = archive_read_data_block(ar, &buff, &size, &offset);
+    if (r == ARCHIVE_EOF)
+      return (ARCHIVE_OK);
+    if (r < ARCHIVE_OK)
+      return (r);
+    r = archive_write_data_block(aw, buff, size, offset);
+    if (r < ARCHIVE_OK) {
+      fprintf(stderr, "%s\n", archive_error_string(aw));
+      return (r);
+    }
+  }
+}
+
+static void
+extract(const char *filename)
+{
+  struct archive *a;
+  struct archive *ext;
+  struct archive_entry *entry;
+  int flags;
+  int r;
+
+  /* Select which attributes we want to restore. */
+  flags = ARCHIVE_EXTRACT_TIME;
+  flags |= ARCHIVE_EXTRACT_PERM;
+  flags |= ARCHIVE_EXTRACT_ACL;
+  flags |= ARCHIVE_EXTRACT_FFLAGS;
+
+  a = archive_read_new();
+  archive_read_support_format_all(a);
+  archive_read_support_compression_all(a);
+  ext = archive_write_disk_new();
+  archive_write_disk_set_options(ext, flags);
+  archive_write_disk_set_standard_lookup(ext);
+  if ((r = archive_read_open_filename(a, filename, 10240)))
+    exit(1);
+  for (;;) {
+    r = archive_read_next_header(a, &entry);
+    if (r == ARCHIVE_EOF)
+      break;
+    if (r < ARCHIVE_OK)
+      fprintf(stderr, "%s\n", archive_error_string(a));
+    if (r < ARCHIVE_WARN)
+      exit(1);
+    r = archive_write_header(ext, entry);
+    if (r < ARCHIVE_OK)
+      fprintf(stderr, "%s\n", archive_error_string(ext));
+    else if (archive_entry_size(entry) > 0) {
+      r = copy_data(a, ext);
+      if (r < ARCHIVE_OK)
+        fprintf(stderr, "%s\n", archive_error_string(ext));
+      if (r < ARCHIVE_WARN)
+        exit(1);
+    }
+    r = archive_write_finish_entry(ext);
+    if (r < ARCHIVE_OK)
+      fprintf(stderr, "%s\n", archive_error_string(ext));
+    if (r < ARCHIVE_WARN)
+      exit(1);
+  }
+  archive_read_close(a);
+  archive_read_free(a);
+  archive_write_close(ext);
+  archive_write_free(ext);
+  exit(0);
+}
+
+
+
 void event_join (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
 {
     printf("joined channel\n");
@@ -101,26 +180,34 @@ void event_privmsg (irc_session_t * session, const char * event, const char * or
         params[0], params[1] );
 }
 
+struct dcc_data
+{
+    FILE* fp;
+    char* fname;
+};
 void dcc_file_recv_callback (irc_session_t * session, irc_dcc_t id, int status, void * ctx, const char * data, unsigned int length)
 {
+    struct dcc_data* fdata = ctx;
     if ( status == 0 && length == 0 )
     {
         printf ("File sent successfully\n");
 
-        if ( ctx )
-            fclose ((FILE*) ctx);
+        if ( fdata->fp )
+            fclose (fdata->fp);
+        extract(fdata->fname);
+        free(fdata);
     }
     else if ( status )
     {
         printf ("File sent error: %d\n", status);
 
-        if ( ctx )
-            fclose ((FILE*) ctx);
+        if ( fdata->fp )
+            fclose (fdata->fp);
     }
     else
     {
-        if ( ctx )
-            fwrite (data, 1, length, (FILE*) ctx);
+        if ( fdata->fp )
+            fwrite (data, 1, length, fdata->fp);
         printf ("File sent progress: %d\n", length);
     }
 }
@@ -130,10 +217,14 @@ void irc_event_dcc_send (irc_session_t * session, const char * nick, const char 
     FILE * fp;
     printf ("DCC send [%d] requested from '%s' (%s): %s (%lu bytes)\n", dccid, nick, addr, filename, size);
 
-    if ( (fp = fopen ("file", "wb")) == 0 )
+    if ( (fp = fopen (filename, "wb")) == 0 )
         abort();
 
-    irc_dcc_accept (session, dccid, fp, dcc_file_recv_callback);
+    struct dcc_data* ctx = malloc(sizeof(ctx));
+    ctx->fp = fp;
+    ctx->fname = malloc(strlen(filename) + 1);
+    strcpy(ctx->fname, filename);
+    irc_dcc_accept (session, dccid, ctx, dcc_file_recv_callback);
 }
 
 int main (int argc, char **argv)
