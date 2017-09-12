@@ -155,6 +155,35 @@ search_result_display(const char* fname)
     free(buf);
 }
 
+static char*
+book_select(const char* fname, int selection)
+{
+    if (!fname)
+    {
+        printf("Search first\n");
+        return NULL;
+    }
+
+    FILE* fp = fopen(fname, "r");
+    char *buf = NULL;
+    size_t buffer_size = 0;
+    int counter = 0;
+    while (-1 != getline(&buf, &buffer_size, fp))
+    {
+        if (counter == selection)
+        {
+            fclose(fp);
+            size_t rej = strcspn(buf, "\r\n");
+            buf[rej] = '\0';
+            return buf;
+        }
+        counter++;
+    }
+    fclose(fp);
+    free(buf);
+    return NULL;
+}
+
 struct control_thread_args
 {
     irc_session_t *session;
@@ -185,8 +214,28 @@ static void * control_thread(void * vargs)
 
         if (FD_ISSET(0, &rfds))
         {
-            getline(&buf, &buffer_size, stdin);
-            irc_cmd_msg (args->session, args->channel, buf);
+            if (-1 == getline(&buf, &buffer_size, stdin))
+            {
+                exit(0);
+            }
+            int selection;
+            if (sscanf(buf, "%d", &selection))
+            {
+                char * msg = book_select(args->extract_fname, selection);
+                if (msg)
+                {
+                    printf("Sending: %s\n", msg);
+                    irc_cmd_msg(args->session, args->channel, msg);
+                    free(msg);
+                }
+            }
+            else
+            {
+                size_t rej = strcspn(buf, "\r\n");
+                buf[rej] = '\0';
+                printf("Searching %s\n", buf);
+                irc_cmd_msg(args->session, args->channel, buf);
+            }
         }
         if (FD_ISSET(args->extract_efd, &rfds))
         {
@@ -337,7 +386,7 @@ int main (int argc, char **argv)
     irc_callbacks_t callbacks;
     irc_ctx_t ctx;
     irc_session_t * s;
-    unsigned short port;
+    unsigned short port = 6667;
 
     if ( argc != 4 )
     {
