@@ -51,6 +51,45 @@ typedef struct
     struct file_thread_args* file_thread;
 } irc_ctx_t;
 
+static void addlog (const char * fmt, ...)
+{
+    FILE * fp;
+    char buf[1024];
+    va_list va_alist;
+
+    va_start (va_alist, fmt);
+    vsnprintf (buf, sizeof(buf), fmt, va_alist);
+    va_end (va_alist);
+
+    printf ("%s\n", buf);
+
+    if ( (fp = fopen ("irctest.log", "ab")) != 0 )
+    {
+        fprintf (fp, "%s\n", buf);
+        fclose (fp);
+    }
+}
+
+
+static void dump_event (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
+{
+    char buf[512];
+    int cnt;
+
+    buf[0] = '\0';
+
+    for ( cnt = 0; cnt < count; cnt++ )
+    {
+        if ( cnt )
+            strcat (buf, "|");
+
+        strcat (buf, params[cnt]);
+    }
+
+
+    addlog ("Event \"%s\", origin: \"%s\", params: %d [%s]", event, origin ? origin : "NULL", cnt, buf);
+}
+
 static int
 copy_data(struct archive *ar, struct archive *aw)
 {
@@ -280,14 +319,29 @@ static void * file_thread(void * vargs)
     return 0;
 }
 
-
-
-
-
-void event_join (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
+static void event_join (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
 {
-    printf("joined channel\n");
-    irc_cmd_user_mode (session, "+i");
+    dump_event (session, event, origin, params, count);
+    char nick[32];
+    irc_target_get_nick(origin, nick, 32);
+    if (0 == strncmp
+        (((irc_ctx_t *)irc_get_ctx(session))->nick
+        ,nick
+        ,strlen(((irc_ctx_t *)irc_get_ctx(session))->nick)
+        ))
+    {
+        printf("Joined Channel\n");
+    }
+}
+
+
+static void event_connect (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
+{
+    dump_event (session, event, origin, params, count);
+    printf("connected\n");
+    irc_ctx_t * ctx = (irc_ctx_t *) irc_get_ctx (session);
+
+    irc_cmd_join (session, ctx->channel, 0);
 
     pthread_t tid;
     struct control_thread_args* ct = malloc(sizeof(struct control_thread_args));
@@ -311,21 +365,27 @@ void event_join (irc_session_t * session, const char * event, const char * origi
 }
 
 
-void event_connect (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
+static void event_privmsg (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
 {
-    printf("connected\n");
-    irc_ctx_t * ctx = (irc_ctx_t *) irc_get_ctx (session);
-    // dump_event (session, event, origin, params, count);
+    dump_event (session, event, origin, params, count);
 
-    irc_cmd_join (session, ctx->channel, 0);
-}
-
-
-void event_privmsg (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
-{
     printf ("'%s' said me (%s): %s\n",
         origin ? origin : "someone",
         params[0], params[1] );
+}
+
+static void event_numeric (irc_session_t * session, unsigned int event, const char * origin, const char ** params, unsigned int count)
+{
+
+    char buf[24];
+    sprintf (buf, "%d", event);
+
+    dump_event (session, buf, origin, params, count);
+
+    if (event == 353)
+    {
+
+    }
 }
 
 struct dcc_ctx
@@ -333,7 +393,7 @@ struct dcc_ctx
     FILE* fp;
     char* fname;
 };
-void dcc_file_recv_callback (irc_session_t * session, irc_dcc_t id, int status, void * ctx, const char * data, unsigned int length)
+static void dcc_file_recv_callback (irc_session_t * session, irc_dcc_t id, int status, void * ctx, const char * data, unsigned int length)
 {
     struct dcc_ctx* fdata = ctx;
     irc_ctx_t* session_ctx = irc_get_ctx(session);
@@ -367,7 +427,7 @@ void dcc_file_recv_callback (irc_session_t * session, irc_dcc_t id, int status, 
     }
 }
 
-void irc_event_dcc_send (irc_session_t * session, const char * nick, const char * addr, const char * filename, unsigned long size, irc_dcc_t dccid)
+static void irc_event_dcc_send (irc_session_t * session, const char * nick, const char * addr, const char * filename, unsigned long size, irc_dcc_t dccid)
 {
     struct dcc_ctx* ctx = malloc(sizeof(struct dcc_ctx));
 
@@ -400,6 +460,20 @@ int main (int argc, char **argv)
     callbacks.event_join = event_join;
     callbacks.event_privmsg = event_privmsg;
     callbacks.event_dcc_send_req = irc_event_dcc_send;
+    callbacks.event_numeric = event_numeric;
+
+    callbacks.event_nick = dump_event;
+    callbacks.event_quit = dump_event;
+    callbacks.event_part = dump_event;
+    callbacks.event_mode = dump_event;
+    callbacks.event_topic = dump_event;
+    callbacks.event_kick = dump_event;
+    callbacks.event_notice = dump_event;
+    callbacks.event_invite = dump_event;
+    callbacks.event_umode = dump_event;
+    callbacks.event_ctcp_rep = dump_event;
+    callbacks.event_ctcp_action = dump_event;
+    callbacks.event_unknown = dump_event;
 
     s = irc_create_session (&callbacks);
 
