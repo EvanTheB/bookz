@@ -39,6 +39,7 @@
 #include "libircclient.h"
 #include "archive.h"
 #include "archive_entry.h"
+#include "names.h"
 
 
 /*
@@ -49,6 +50,7 @@ typedef struct
     char    * channel;
     char    * nick;
     struct file_thread_args* file_thread;
+    names_t names;
 } irc_ctx_t;
 
 static void addlog (const char * fmt, ...)
@@ -179,8 +181,20 @@ extract(const char *filename)
     return search_result_fname;
 }
 
+static int filter_name(names_t *names, const char *search_line)
+{
+    char *tmp = NULL;
+    int ret = sscanf(search_line, "!%ms ", &tmp);
+    if (ret)
+    {
+        ret = names_find(names, tmp);
+    }
+    free(tmp);
+    return ret;
+}
+
 static void
-search_result_display(const char* fname)
+search_result_display(const char* fname, names_t *names)
 {
     FILE* fp = fopen(fname, "r");
     char *buf = NULL;
@@ -188,14 +202,17 @@ search_result_display(const char* fname)
     int counter = 0;
     while (-1 != getline(&buf, &buffer_size, fp))
     {
-        printf("%d: %s", counter++, buf);
+        if (filter_name(names, buf))
+        {
+            printf("%d: %s", counter++, buf);
+        }
     }
     fclose(fp);
     free(buf);
 }
 
 static char*
-book_select(const char* fname, int selection)
+book_select(const char* fname, int selection, names_t *names)
 {
     if (!fname)
     {
@@ -209,14 +226,17 @@ book_select(const char* fname, int selection)
     int counter = 0;
     while (-1 != getline(&buf, &buffer_size, fp))
     {
-        if (counter == selection)
+        if (filter_name(names, buf))
         {
-            fclose(fp);
-            size_t rej = strcspn(buf, "\r\n");
-            buf[rej] = '\0';
-            return buf;
+            if (counter == selection)
+            {
+                fclose(fp);
+                size_t rej = strcspn(buf, "\r\n");
+                buf[rej] = '\0';
+                return buf;
+            }
+            counter++;
         }
-        counter++;
     }
     fclose(fp);
     free(buf);
@@ -229,6 +249,7 @@ struct control_thread_args
     char *channel;
     int extract_efd;
     char *extract_fname;
+    names_t *names;
 };
 static void * control_thread(void * vargs)
 {
@@ -237,6 +258,8 @@ static void * control_thread(void * vargs)
     int retval;
     char *buf = NULL;
     size_t buffer_size = 0;
+
+    names_t *names = &((irc_ctx_t *)irc_get_ctx(args->session))->names;
 
     while ( 1 )
     {
@@ -260,7 +283,7 @@ static void * control_thread(void * vargs)
             int selection;
             if (sscanf(buf, "%d", &selection))
             {
-                char * msg = book_select(args->extract_fname, selection);
+                char * msg = book_select(args->extract_fname, selection, names);
                 if (msg)
                 {
                     printf("Sending: %s\n", msg);
@@ -272,15 +295,18 @@ static void * control_thread(void * vargs)
             {
                 size_t rej = strcspn(buf, "\r\n");
                 buf[rej] = '\0';
-                printf("Searching %s\n", buf);
-                irc_cmd_msg(args->session, args->channel, buf);
+                char* search_tmp = malloc(strlen(buf) + 1 + 6);
+                sprintf(search_tmp, "@search %s", buf);
+                printf("Searching %s\n", search_tmp);
+                irc_cmd_msg(args->session, args->channel, search_tmp);
             }
         }
         if (FD_ISSET(args->extract_efd, &rfds))
         {
             uint64_t tmp;
             read(args->extract_efd, &tmp, sizeof(uint64_t));
-            search_result_display(args->extract_fname);
+            printf("Choose from results:\n");
+            search_result_display(args->extract_fname, names);
         }
     }
 
@@ -374,9 +400,19 @@ static void event_privmsg (irc_session_t * session, const char * event, const ch
         params[0], params[1] );
 }
 
+static void event_channel (irc_session_t * session, const char * event, const char * origin, const char ** params, unsigned int count)
+{
+    if ( count != 2 )
+        return;
+
+    printf ("'%s' said in channel %s: %s\n",
+        origin ? origin : "someone",
+        params[0], params[1] );
+}
+
 static void event_numeric (irc_session_t * session, unsigned int event, const char * origin, const char ** params, unsigned int count)
 {
-
+    irc_ctx_t* session_ctx = irc_get_ctx(session);
     char buf[24];
     sprintf (buf, "%d", event);
 
@@ -384,7 +420,7 @@ static void event_numeric (irc_session_t * session, unsigned int event, const ch
 
     if (event == 353)
     {
-
+        names_add_many(&session_ctx->names, params[3]);
     }
 }
 
@@ -462,6 +498,7 @@ int main (int argc, char **argv)
     callbacks.event_dcc_send_req = irc_event_dcc_send;
     callbacks.event_numeric = event_numeric;
 
+    callbacks.event_channel = dump_event;
     callbacks.event_nick = dump_event;
     callbacks.event_quit = dump_event;
     callbacks.event_part = dump_event;
@@ -485,6 +522,7 @@ int main (int argc, char **argv)
 
     ctx.channel = argv[3];
     ctx.nick = argv[2];
+    names_init(&ctx.names);
 
     irc_set_ctx (s, &ctx);
 

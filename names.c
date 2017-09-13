@@ -1,15 +1,12 @@
 // save the names,
 // so we don't ask for books from people who aren't on the server
 // no need for destruct as we dont use it :D
+// if needed make it qsort and bsearch, or hashes
 
 #include "string.h"
 #include "malloc.h"
 
-typedef struct
-{
-    char *buffer;
-    int len;
-} names_t;
+#include "names.h"
 
 void names_init(names_t *names)
 {
@@ -38,9 +35,14 @@ int names_find(names_t *names, const char* name)
 // space separated names
 void names_add_many(names_t *names, const char* many_names)
 {
-    size_t len = strlen(names->buffer) + strlen(many_names);
-    names->buffer = realloc(names->buffer, len + 2);
+    size_t len = strlen(names->buffer);
+    names->buffer = realloc(names->buffer, strlen(many_names) + len + 2);
     strcat(names->buffer, many_names);
+    for(char* t = names->buffer + len; *t != '\0'; t++)
+    {
+        if (*t == '+') *t = ' ';
+        if (*t == '@') *t = ' ';
+    }
     strcat(names->buffer, " ");
 }
 
